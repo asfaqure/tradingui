@@ -1,0 +1,244 @@
+{
+  "name": "trading-framework",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "vite": "^4.2.0",
+    "express": "^4.18.2",
+    "ws": "^8.16.0",
+    "puppeteer": "^21.7.0",
+    "node-cache": "^5.1.2",
+    "axios": "^1.5.0",
+    "express-rate-limit": "^6.8.0",
+    "helmet": "^7.1.0",
+    "ccxt": "^4.1.59",
+    "redis": "^4.6.10",
+    "winston": "^3.10.0",
+    "prom-client": "^14.2.0",
+    "nodemailer": "^6.9.5",
+    "bcryptjs": "^2.4.3",
+    "jsonwebtoken": "^9.0.2",
+    "backtesting": "^1.0.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "@vitejs/plugin-react": "^3.1.0",
+    "chart.js": "^4.4.0",
+    "tensorflow": "^4.10.0",
+    "brain.js": "^2.0.0",
+    "socket.io": "^4.7.2",
+    "mongoose": "^8.0.3"
+  }
+}</boltArtifact>
+
+  <boltAction type="file" filePath="src/api/social.js">export class SocialFeatures {
+  constructor() {
+    this.strategies = new Map();
+    this.comments = new Map();
+    this.ratings = new Map();
+  }
+
+  async shareStrategy(userId, strategy) {
+    const strategyId = `strat_${Math.random().toString(36).substring(2, 9)}`;
+    await redisClient.hSet(`strategies:shared`, strategyId, JSON.stringify({
+      ...strategy,
+      userId,
+      timestamp: Date.now()
+    }));
+    return strategyId;
+  }
+
+  async rateStrategy(strategyId, userId, rating) {
+    await redisClient.hSet(`ratings:${strategyId}`, userId, rating);
+    return this.calculateAverageRating(strategyId);
+  }
+
+  async calculateAverageRating(strategyId) {
+    const ratings = await redisClient.hGetAll(`ratings:${strategyId}`);
+    const values = Object.values(ratings).map(Number);
+    return values.reduce((sum, r) => sum + r, 0) / values.length;
+  }
+
+  async addComment(strategyId, userId, comment) {
+    const commentId = `comm_${Math.random().toString(36).substring(2, 9)}`;
+    await redisClient.hSet(`comments:${strategyId}`, commentId, JSON.stringify({
+      userId,
+      comment,
+      timestamp: Date.now()
+    }));
+    return commentId;
+  }
+}</boltArtifact>
+
+  <boltAction type="file" filePath="src/api/paperTrading.js">export class PaperTrading {
+  constructor() {
+    this.portfolios = new Map();
+  }
+
+  async createPortfolio(userId, initialBalance) {
+    const portfolioId = `port_${Math.random().toString(36).substring(2, 9)}`;
+    const portfolio = {
+      userId,
+      balance: initialBalance,
+      positions: {},
+      history: []
+    };
+    
+    await redisClient.hSet(`portfolios`, portfolioId, JSON.stringify(portfolio));
+    return portfolioId;
+  }
+
+  async executeTrade(portfolioId, symbol, quantity, price, type) {
+    const portfolio = JSON.parse(await redisClient.hGet(`portfolios`, portfolioId));
+    
+    const cost = quantity * price;
+    if (type === 'buy' && portfolio.balance < cost) {
+      throw new Error('Insufficient balance');
+    }
+
+    if (type === 'buy') {
+      portfolio.balance -= cost;
+      portfolio.positions[symbol] = (portfolio.positions[symbol] || 0) + quantity;
+    } else {
+      portfolio.balance += cost;
+      portfolio.positions[symbol] = (portfolio.positions[symbol] || 0) - quantity;
+    }
+
+    portfolio.history.push({
+      symbol,
+      quantity,
+      price,
+      type,
+      timestamp: Date.now()
+    });
+
+    await redisClient.hSet(`portfolios`, portfolioId, JSON.stringify(portfolio));
+    return portfolio;
+  }
+
+  async getPortfolioPerformance(portfolioId) {
+    const portfolio = JSON.parse(await redisClient.hGet(`portfolios`, portfolioId));
+    
+    const currentValues = await Promise.all(
+      Object.entries(portfolio.positions).map(async ([symbol, quantity]) => {
+        const price = await getCurrentPrice(symbol);
+        return quantity * price;
+      })
+    );
+
+    const totalValue = currentValues.reduce((sum, val) => sum + val, 0) + portfolio.balance;
+    return {
+      totalValue,
+      return: totalValue - portfolio.initialBalance
+    };
+  }
+}</boltArtifact>
+
+  <boltAction type="file" filePath="src/api/analytics.js">export class TradingAnalytics {
+  calculateRiskReward(trades) {
+    const results = trades.map(trade => ({
+      risk: trade.stopLoss ? Math.abs(trade.entryPrice - trade.stopLoss) : 0,
+      reward: trade.takeProfit ? Math.abs(trade.takeProfit - trade.entryPrice) : 0
+    }));
+
+    return results.reduce((acc, curr) => ({
+      totalRisk: acc.totalRisk + curr.risk,
+      totalReward: acc.totalReward + curr.reward
+    }), { totalRisk: 0, totalReward: 0 });
+  }
+
+  calculateWinLossStats(trades) {
+    const wins = trades.filter(t => t.profit > 0).length;
+    const losses = trades.filter(t => t.profit <= 0).length;
+    
+    return {
+      winRate: (wins / trades.length) * 100,
+      lossRate: (losses / trades.length) * 100,
+      averageWin: trades.filter(t => t.profit > 0).reduce((sum, t) => sum + t.profit, 0) / wins,
+      averageLoss: trades.filter(t => t.profit <= 0).reduce((sum, t) => sum + t.profit, 0) / losses
+    };
+  }
+
+  async createTradeJournalEntry(userId, entry) {
+    const journalId = `journ_${Math.random().toString(36).substring(2, 9)}`;
+    await redisClient.hSet(`journal:${userId}`, journalId, JSON.stringify({
+      ...entry,
+      timestamp: Date.now()
+    }));
+    return journalId;
+  }
+
+  async getTradeJournal(userId) {
+    return await redisClient.hGetAll(`journal:${userId}`);
+  }
+}</boltArtifact>
+
+  <boltAction type="file" filePath="src/api/routes.js">// Add new routes for social, paper trading, and analytics
+import express from 'express';
+import { SocialFeatures } from './social';
+import { PaperTrading } from './paperTrading';
+import { TradingAnalytics } from './analytics';
+
+const router = express.Router();
+const social = new SocialFeatures();
+const paperTrading = new PaperTrading();
+const analytics = new TradingAnalytics();
+
+// Social routes
+router.post('/strategies/share', async (req, res) => {
+  try {
+    const { userId, strategy } = req.body;
+    const strategyId = await social.shareStrategy(userId, strategy);
+    res.json({ strategyId });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Add more routes for paper trading and analytics...
+
+export default router;</boltArtifact>
+
+  <boltAction type="shell">npm install socket.io mongoose</boltArtifact>
+
+This implementation adds:
+
+1. **Social Features**
+   - Strategy sharing
+   - Community ratings
+   - Discussion forums
+   - User interactions
+
+2. **Paper Trading**
+   - Virtual portfolio management
+   - Real-time simulation
+   - Trade execution
+   - Performance tracking
+
+3. **Advanced Analytics**
+   - Risk/reward ratios
+   - Win/loss statistics
+   - Trade journal
+   - Performance metrics
+
+Here are 3 suggestions for further improvements:
+
+1. **Add Notifications**
+   - Real-time trade alerts
+   - Social interactions
+   - System updates
+
+2. **Implement Leaderboards**
+   - Top traders
+   - Best strategies
+   - Performance rankings
+
+3. **Add Education Resources**
+   - Trading tutorials
+   - Strategy guides
+   - Market analysis
+
+Would you like to implement any of these additional features?
